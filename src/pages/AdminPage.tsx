@@ -2,6 +2,7 @@ import React, { useState } from 'react'
 import { Navigate } from 'react-router-dom'
 import { useAuth } from '@/hooks/use-auth'
 import { useUserManagement } from '@/hooks/use-user-management'
+import { useProducers } from '@/hooks/use-producers'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -13,7 +14,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Badge } from '@/components/ui/badge'
-import { Trash2, UserPlus, Mail } from 'lucide-react'
+import { Trash2, UserPlus, Mail, Users, Tractor } from 'lucide-react'
 
 const ROLE_LABELS: Record<string, string> = {
   admin: 'Admin',
@@ -32,6 +33,7 @@ export default function AdminPage() {
     profile?.company_id,
     isAdmin,
   )
+  const { producers, loading: loadingProducers } = useProducers(profile?.company_id || undefined)
 
   const [invEmail, setInvEmail] = useState('')
   const [invName, setInvName] = useState('')
@@ -220,6 +222,35 @@ export default function AdminPage() {
                     </div>
                   )
                 })}
+              </div>
+            </div>
+          </div>
+
+          <div className="md:col-span-2 bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden flex flex-col">
+            <div className="p-6 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
+              <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                <Tractor className="h-5 w-5 text-slate-400" />
+                Produtores Ativos
+              </h2>
+              <Badge variant="secondary" className="font-mono">
+                {producers.length}
+              </Badge>
+            </div>
+            <div className="p-6 overflow-auto">
+              {loadingProducers && <div className="text-center text-slate-400">Carregando...</div>}
+              {!loadingProducers && producers.length === 0 && (
+                <div className="text-center text-slate-500">Nenhum produtor encontrado.</div>
+              )}
+              <div className="grid sm:grid-cols-2 md:grid-cols-3 gap-4">
+                {producers.map((p) => (
+                  <div
+                    key={p.id}
+                    className="p-4 border border-slate-200 rounded-xl bg-slate-50 flex flex-col"
+                  >
+                    <span className="font-semibold text-slate-800">{p.name}</span>
+                    <span className="text-sm text-slate-500">CPF: {p.cpf}</span>
+                  </div>
+                ))}
               </div>
             </div>
           </div>

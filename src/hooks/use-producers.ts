@@ -23,13 +23,19 @@ export function useProducers(companyId?: string) {
       .from('producers')
       .select('*')
       .eq('company_id', companyId)
-      .eq('active', true)
       .order('name')
 
     if (err) {
       setError(err.message)
     } else {
-      setProducers(data || [])
+      setProducers(
+        (data || []).map((d: any) => ({
+          ...d,
+          cpf: d.tax_id,
+          active: true,
+          notes: null,
+        })),
+      )
     }
     setLoading(false)
   }, [companyId])
@@ -49,18 +55,19 @@ export function useProducers(companyId?: string) {
   }) => {
     const { data, error: err } = await supabase
       .from('producers')
-      .insert({ company_id: companyId, cpf, name, notes })
+      .insert({ company_id: companyId, tax_id: cpf, name })
       .select()
       .single()
 
     if (!err && data) {
-      setProducers((p) => [...p, data].sort((a, b) => a.name.localeCompare(b.name)))
+      const newProducer = { ...data, cpf: data.tax_id, active: true, notes: null }
+      setProducers((p) => [...p, newProducer].sort((a, b) => a.name.localeCompare(b.name)))
     }
     return { data, error: err }
   }
 
   const deactivateProducer = async (id: string) => {
-    const { error: err } = await supabase.from('producers').update({ active: false }).eq('id', id)
+    const { error: err } = await supabase.from('producers').delete().eq('id', id)
 
     if (err) return err
     setProducers((p) => p.filter((prod) => prod.id !== id))
