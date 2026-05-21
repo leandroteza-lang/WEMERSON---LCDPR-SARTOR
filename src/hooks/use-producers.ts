@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { supabase } from '@/lib/supabase'
+import { supabase } from '@/lib/supabase/client'
 
 export type Producer = {
   id: string
@@ -55,7 +55,7 @@ export function useProducers(companyId?: string) {
   }) => {
     const { data, error: err } = await supabase
       .from('producers')
-      .insert({ company_id: companyId, tax_id: cpf, name })
+      .insert({ company_id: companyId!, tax_id: cpf, name })
       .select()
       .single()
 

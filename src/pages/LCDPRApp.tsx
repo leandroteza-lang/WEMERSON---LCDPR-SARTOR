@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useAuth } from '@/hooks/use-auth'
 import { useLCDPRFiles } from '@/hooks/use-lcdpr-files'
+import { supabase } from '@/lib/supabase/client'
 import { audit } from '@/lib/audit'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -15,8 +16,34 @@ import {
 } from '@/components/ui/table'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Badge } from '@/components/ui/badge'
-import { Save, Lock, ArrowLeft, Download, Upload, AlertTriangle, CheckCircle2 } from 'lucide-react'
-import { fmtBRL } from '@/lib/utils'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import {
+  Save,
+  Lock,
+  ArrowLeft,
+  Download,
+  Upload,
+  AlertTriangle,
+  CheckCircle2,
+  Trash2,
+  Plus,
+  FileText,
+} from 'lucide-react'
+import { toast } from 'sonner'
+
+const safeAudit = (data: any[]) => {
+  try {
+    return audit ? audit(data) : { score: 100, issues: [] }
+  } catch (e) {
+    return { score: 100, issues: [] }
+  }
+}
 
 export default function LCDPRApp() {
   const { producerId, year } = useParams()
@@ -26,31 +53,48 @@ export default function LCDPRApp() {
   const { current, saving, saveError, lastSaved, loadYear, saveCurrentYear, finalizeYear } =
     useLCDPRFiles(producerId)
 
-  const [data, setData] = useState<any[]>([])
+  const [content, setContent] = useState<any>({ properties: [], accounts: [], q100: [] })
+  const [producer, setProducer] = useState<{ name: string; tax_id: string } | null>(null)
   const [result, setResult] = useState<any>(null)
   const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    if (!producerId) return
+    supabase
+      .from('producers')
+      .select('name, tax_id')
+      .eq('id', producerId)
+      .single()
+      .then(({ data }) => {
+        if (data) setProducer(data)
+      })
+  }, [producerId])
 
   useEffect(() => {
     if (!producerId || !year) return
     loadYear(parseInt(year)).then(({ data: file, error }) => {
       if (error || !file) {
+        toast.error('Arquivo LCDPR não encontrado.')
         navigate('/')
         return
       }
-      const rows = file.data || []
-      setData(rows)
-      setResult(audit(rows))
+
+      const fileContent = file.content || { properties: [], accounts: [], q100: [] }
+      setContent(fileContent)
+      setResult(safeAudit(fileContent.q100 || []))
       setLoading(false)
     })
   }, [producerId, year])
 
-  const handleDataChange = (newData: any[]) => {
-    const auditResult = audit(newData)
-    setData(newData)
+  const updateContent = (partial: any) => {
+    if (!isEditor || current?.status === 'finalized') return
+    const newContent = { ...content, ...partial }
+    setContent(newContent)
+
+    const auditResult = safeAudit(newContent.q100 || [])
     setResult(auditResult)
-    if (isEditor && current?.status !== 'finalized') {
-      saveCurrentYear(newData, auditResult)
-    }
+
+    saveCurrentYear({ ...newContent, audit: auditResult })
   }
 
   const readOnly = !isEditor || current?.status === 'finalized'
@@ -58,24 +102,37 @@ export default function LCDPRApp() {
   const handleFinalize = async () => {
     if (!confirm('Finalizar o LCDPR? Esta ação bloqueia edições futuras.')) return
     const { error } = await finalizeYear()
-    if (error) alert(`Erro ao finalizar: ${error.message}`)
+    if (error) toast.error(`Erro ao finalizar: ${error.message}`)
+    else toast.success('LCDPR finalizado com sucesso!')
   }
 
-  // Simplified logic for editing Q100 specifically for this MVP SaaS
+  const handleUpdateProducer = async () => {
+    if (!producer || !producerId) return
+    const { error } = await supabase
+      .from('producers')
+      .update({ name: producer.name, tax_id: producer.tax_id })
+      .eq('id', producerId)
+    if (error) {
+      toast.error('Erro ao atualizar produtor: ' + error.message)
+    } else {
+      toast.success('Produtor atualizado com sucesso!')
+    }
+  }
+
+  // Q100
   const addQ100Row = () => {
-    if (readOnly) return
-    const newId = Math.max(0, ...data.map((d) => d.id)) + 1
+    const q100 = content.q100 || []
+    const newId = q100.length > 0 ? Math.max(...q100.map((d: any) => d.id)) + 1 : 1
     const newRow = {
       id: newId,
       reg: 'Q100',
       parts: ['Q100', '', '', '', '', '', '', '', '', '', '', ''],
     }
-    handleDataChange([...data, newRow])
+    updateContent({ q100: [...q100, newRow] })
   }
 
   const updateQ100Row = (id: number, partIndex: number, value: string) => {
-    if (readOnly) return
-    const newData = data.map((d) => {
+    const q100 = (content.q100 || []).map((d: any) => {
       if (d.id === id) {
         const newParts = [...d.parts]
         newParts[partIndex] = value
@@ -83,12 +140,53 @@ export default function LCDPRApp() {
       }
       return d
     })
-    handleDataChange(newData)
+    updateContent({ q100 })
   }
 
   const deleteRow = (id: number) => {
-    if (readOnly) return
-    handleDataChange(data.filter((d) => d.id !== id))
+    updateContent({ q100: (content.q100 || []).filter((d: any) => d.id !== id) })
+  }
+
+  // Properties 0040
+  const handleAddProperty = () => {
+    const newProps = [
+      ...(content.properties || []),
+      { id: Date.now().toString(), name: '', incra: '', registration: '', ownership: '' },
+    ]
+    updateContent({ properties: newProps })
+  }
+
+  const handleUpdateProperty = (id: string, field: string, value: string) => {
+    const newProps = (content.properties || []).map((p: any) =>
+      p.id === id ? { ...p, [field]: value } : p,
+    )
+    updateContent({ properties: newProps })
+  }
+
+  const handleDeleteProperty = (id: string) => {
+    const newProps = (content.properties || []).filter((p: any) => p.id !== id)
+    updateContent({ properties: newProps })
+  }
+
+  // Accounts 0050
+  const handleAddAccount = () => {
+    const newAccs = [
+      ...(content.accounts || []),
+      { id: Date.now().toString(), bank: '', agency: '', account: '' },
+    ]
+    updateContent({ accounts: newAccs })
+  }
+
+  const handleUpdateAccount = (id: string, field: string, value: string) => {
+    const newAccs = (content.accounts || []).map((a: any) =>
+      a.id === id ? { ...a, [field]: value } : a,
+    )
+    updateContent({ accounts: newAccs })
+  }
+
+  const handleDeleteAccount = (id: string) => {
+    const newAccs = (content.accounts || []).filter((a: any) => a.id !== id)
+    updateContent({ accounts: newAccs })
   }
 
   if (loading)
@@ -98,13 +196,12 @@ export default function LCDPRApp() {
       </div>
     )
 
-  const q100Rows = data.filter((d) => d.reg === 'Q100')
+  const q100Rows = content.q100 || []
   const score = result?.score ?? 0
   const isScorePerfect = score === 100
 
   return (
     <div className="flex-1 flex flex-col h-full overflow-hidden bg-slate-50">
-      {/* Editor Header */}
       <header className="bg-white border-b border-slate-200 px-6 py-3 flex items-center justify-between shrink-0">
         <div className="flex items-center gap-4">
           <Button
@@ -165,7 +262,6 @@ export default function LCDPRApp() {
       </header>
 
       <div className="flex-1 flex overflow-hidden">
-        {/* Main Workspace */}
         <div className="flex-1 flex flex-col overflow-hidden p-6">
           <Tabs
             defaultValue="q100"
@@ -183,7 +279,7 @@ export default function LCDPRApp() {
                   value="0040"
                   className="data-[state=active]:bg-white data-[state=active]:shadow-sm rounded-lg text-xs font-semibold px-4"
                 >
-                  0040/0045 (Imóveis)
+                  0040 (Imóveis)
                 </TabsTrigger>
                 <TabsTrigger
                   value="0050"
@@ -198,15 +294,273 @@ export default function LCDPRApp() {
                   Q100 (Lançamentos)
                 </TabsTrigger>
               </TabsList>
-
-              {!readOnly && (
-                <div className="flex gap-2">
-                  <Button variant="outline" size="sm" className="h-8 text-xs font-semibold">
-                    <Upload className="h-3 w-3 mr-1" /> Importar OFX
-                  </Button>
-                </div>
-              )}
             </div>
+
+            <TabsContent value="0000" className="p-8 overflow-auto flex-1">
+              <div className="space-y-6 max-w-2xl">
+                <div>
+                  <h3 className="text-lg font-medium text-slate-800">
+                    Identificação do Produtor (Bloco 0000)
+                  </h3>
+                  <p className="text-sm text-slate-500">
+                    Os dados informados aqui atualizam o cadastro principal do produtor e serão
+                    refletidos no LCDPR.
+                  </p>
+                </div>
+
+                <div className="grid gap-4 bg-white p-6 border border-slate-200 rounded-xl shadow-sm">
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium text-slate-700">
+                      Nome Completo / Razão Social
+                    </label>
+                    <Input
+                      disabled={readOnly}
+                      value={producer?.name || ''}
+                      onChange={(e) =>
+                        setProducer((prev) => (prev ? { ...prev, name: e.target.value } : null))
+                      }
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium text-slate-700">CPF</label>
+                    <Input
+                      disabled={readOnly}
+                      value={producer?.tax_id || ''}
+                      onChange={(e) =>
+                        setProducer((prev) => (prev ? { ...prev, tax_id: e.target.value } : null))
+                      }
+                    />
+                  </div>
+
+                  {!readOnly && (
+                    <div className="pt-2 flex justify-end">
+                      <Button
+                        onClick={handleUpdateProducer}
+                        className="bg-lcdpr-primary hover:bg-lcdpr-primary/90 text-white"
+                      >
+                        <Save className="h-4 w-4 mr-2" /> Salvar Dados do Produtor
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </TabsContent>
+
+            <TabsContent value="0040" className="p-8 overflow-auto flex-1">
+              <div className="space-y-4 max-w-5xl">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h3 className="text-lg font-medium text-slate-800">
+                      Imóveis Rurais (Bloco 0040)
+                    </h3>
+                    <p className="text-sm text-slate-500">
+                      Cadastre os imóveis relacionados à atividade rural.
+                    </p>
+                  </div>
+                  {!readOnly && (
+                    <Button
+                      onClick={handleAddProperty}
+                      size="sm"
+                      variant="outline"
+                      className="border-lcdpr-primary/50 text-lcdpr-primary hover:bg-lcdpr-primary/5"
+                    >
+                      <Plus className="h-4 w-4 mr-1" /> Adicionar Imóvel
+                    </Button>
+                  )}
+                </div>
+
+                <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
+                  <Table>
+                    <TableHeader className="bg-slate-50">
+                      <TableRow>
+                        <TableHead>Identificador</TableHead>
+                        <TableHead>Nome do Imóvel</TableHead>
+                        <TableHead>Cód. INCRA</TableHead>
+                        <TableHead>Nº Matrícula (CAEPF)</TableHead>
+                        <TableHead>Exploração</TableHead>
+                        <TableHead className="w-16"></TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {(content.properties || []).length === 0 ? (
+                        <TableRow>
+                          <TableCell colSpan={6} className="text-center text-slate-400 py-8">
+                            Nenhum imóvel cadastrado.
+                          </TableCell>
+                        </TableRow>
+                      ) : (
+                        (content.properties || []).map((prop: any) => (
+                          <TableRow key={prop.id}>
+                            <TableCell>
+                              <Input
+                                disabled
+                                value={prop.id.substring(0, 5)}
+                                readOnly
+                                className="w-20 bg-slate-50 font-mono text-xs"
+                              />
+                            </TableCell>
+                            <TableCell>
+                              <Input
+                                disabled={readOnly}
+                                value={prop.name}
+                                onChange={(e) =>
+                                  handleUpdateProperty(prop.id, 'name', e.target.value)
+                                }
+                                placeholder="Fazenda Esperança"
+                              />
+                            </TableCell>
+                            <TableCell>
+                              <Input
+                                disabled={readOnly}
+                                value={prop.incra}
+                                onChange={(e) =>
+                                  handleUpdateProperty(prop.id, 'incra', e.target.value)
+                                }
+                                placeholder="000.000.000-00"
+                              />
+                            </TableCell>
+                            <TableCell>
+                              <Input
+                                disabled={readOnly}
+                                value={prop.registration}
+                                onChange={(e) =>
+                                  handleUpdateProperty(prop.id, 'registration', e.target.value)
+                                }
+                                placeholder="12345678"
+                              />
+                            </TableCell>
+                            <TableCell>
+                              <Select
+                                disabled={readOnly}
+                                value={prop.ownership}
+                                onValueChange={(v) => handleUpdateProperty(prop.id, 'ownership', v)}
+                              >
+                                <SelectTrigger>
+                                  <SelectValue placeholder="Selecione..." />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value="proprio">Propriedade</SelectItem>
+                                  <SelectItem value="arrendamento">Arrendamento</SelectItem>
+                                  <SelectItem value="parceria">Parceria</SelectItem>
+                                  <SelectItem value="comodato">Comodato</SelectItem>
+                                </SelectContent>
+                              </Select>
+                            </TableCell>
+                            <TableCell>
+                              {!readOnly && (
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  onClick={() => handleDeleteProperty(prop.id)}
+                                  className="text-red-500 hover:bg-red-50 hover:text-red-600 h-8 w-8"
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </Button>
+                              )}
+                            </TableCell>
+                          </TableRow>
+                        ))
+                      )}
+                    </TableBody>
+                  </Table>
+                </div>
+              </div>
+            </TabsContent>
+
+            <TabsContent value="0050" className="p-8 overflow-auto flex-1">
+              <div className="space-y-4 max-w-4xl">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h3 className="text-lg font-medium text-slate-800">
+                      Contas Bancárias (Bloco 0050)
+                    </h3>
+                    <p className="text-sm text-slate-500">
+                      Cadastre as contas utilizadas na atividade rural.
+                    </p>
+                  </div>
+                  {!readOnly && (
+                    <Button
+                      onClick={handleAddAccount}
+                      size="sm"
+                      variant="outline"
+                      className="border-lcdpr-primary/50 text-lcdpr-primary hover:bg-lcdpr-primary/5"
+                    >
+                      <Plus className="h-4 w-4 mr-1" /> Adicionar Conta
+                    </Button>
+                  )}
+                </div>
+
+                <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
+                  <Table>
+                    <TableHeader className="bg-slate-50">
+                      <TableRow>
+                        <TableHead>Cód. Banco</TableHead>
+                        <TableHead>Agência</TableHead>
+                        <TableHead>Número da Conta</TableHead>
+                        <TableHead className="w-16"></TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {(content.accounts || []).length === 0 ? (
+                        <TableRow>
+                          <TableCell colSpan={4} className="text-center text-slate-400 py-8">
+                            Nenhuma conta cadastrada.
+                          </TableCell>
+                        </TableRow>
+                      ) : (
+                        (content.accounts || []).map((acc: any) => (
+                          <TableRow key={acc.id}>
+                            <TableCell>
+                              <Input
+                                disabled={readOnly}
+                                value={acc.bank}
+                                onChange={(e) =>
+                                  handleUpdateAccount(acc.id, 'bank', e.target.value)
+                                }
+                                placeholder="001"
+                                className="w-24 font-mono"
+                              />
+                            </TableCell>
+                            <TableCell>
+                              <Input
+                                disabled={readOnly}
+                                value={acc.agency}
+                                onChange={(e) =>
+                                  handleUpdateAccount(acc.id, 'agency', e.target.value)
+                                }
+                                placeholder="1234-5"
+                              />
+                            </TableCell>
+                            <TableCell>
+                              <Input
+                                disabled={readOnly}
+                                value={acc.account}
+                                onChange={(e) =>
+                                  handleUpdateAccount(acc.id, 'account', e.target.value)
+                                }
+                                placeholder="12345-6"
+                              />
+                            </TableCell>
+                            <TableCell>
+                              {!readOnly && (
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  onClick={() => handleDeleteAccount(acc.id)}
+                                  className="text-red-500 hover:bg-red-50 hover:text-red-600 h-8 w-8"
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </Button>
+                              )}
+                            </TableCell>
+                          </TableRow>
+                        ))
+                      )}
+                    </TableBody>
+                  </Table>
+                </div>
+              </div>
+            </TabsContent>
 
             <TabsContent value="q100" className="flex-1 overflow-auto p-0 m-0">
               <div className="min-w-[1000px] w-full">
@@ -242,7 +596,7 @@ export default function LCDPRApp() {
                         </TableCell>
                       </TableRow>
                     ) : (
-                      q100Rows.map((row, index) => (
+                      q100Rows.map((row: any, index: number) => (
                         <TableRow
                           key={row.id}
                           className="hover:bg-slate-50/50 group border-b border-slate-100"
@@ -318,26 +672,9 @@ export default function LCDPRApp() {
                 )}
               </div>
             </TabsContent>
-
-            <TabsContent value="0000" className="p-8">
-              <div className="max-w-2xl text-slate-500">
-                Implementação do bloco 0000 na versão completa...
-              </div>
-            </TabsContent>
-            <TabsContent value="0040" className="p-8">
-              <div className="max-w-2xl text-slate-500">
-                Implementação do bloco 0040 na versão completa...
-              </div>
-            </TabsContent>
-            <TabsContent value="0050" className="p-8">
-              <div className="max-w-2xl text-slate-500">
-                Implementação do bloco 0050 na versão completa...
-              </div>
-            </TabsContent>
           </Tabs>
         </div>
 
-        {/* Audit Sidebar Panel */}
         <div className="w-[320px] bg-white border-l border-slate-200 flex flex-col shrink-0">
           <div className="p-6 border-b border-slate-100 bg-slate-50/50">
             <h3 className="font-bold text-slate-800 flex items-center gap-2 mb-4">

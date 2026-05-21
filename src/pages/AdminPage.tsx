@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { Navigate } from 'react-router-dom'
+import { Navigate, Link } from 'react-router-dom'
 import { useAuth } from '@/hooks/use-auth'
 import { useUserManagement } from '@/hooks/use-user-management'
 import { useProducers } from '@/hooks/use-producers'
@@ -245,10 +245,15 @@ export default function AdminPage() {
                 {producers.map((p) => (
                   <div
                     key={p.id}
-                    className="p-4 border border-slate-200 rounded-xl bg-slate-50 flex flex-col"
+                    className="p-4 border border-slate-200 rounded-xl bg-slate-50 flex flex-col relative"
                   >
                     <span className="font-semibold text-slate-800">{p.name}</span>
                     <span className="text-sm text-slate-500">CPF: {p.cpf}</span>
+                    <div className="mt-4 pt-3 border-t border-slate-200/60">
+                      <Button variant="outline" size="sm" className="w-full text-xs" asChild>
+                        <Link to={`/`}>Abrir Painel</Link>
+                      </Button>
+                    </div>
                   </div>
                 ))}
               </div>

@@ -1,16 +1,14 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
-import { supabase } from '@/lib/supabase'
+import { useState, useEffect, useRef } from 'react'
+import { supabase } from '@/lib/supabase/client'
 import { debounce } from '@/lib/utils'
 
 export type LCDPRFile = {
   id: string
   producer_id: string
   year: number
-  data: any[]
+  content: any
   status: 'draft' | 'review' | 'finalized'
-  score: number | null
-  issues_count: number
-  updated_at: string
+  created_at: string
 }
 
 export function useLCDPRFiles(producerId?: string) {
@@ -28,11 +26,11 @@ export function useLCDPRFiles(producerId?: string) {
     }
     supabase
       .from('lcdpr_files')
-      .select('id, year, status, score, issues_count, updated_at')
+      .select('id, year, status, created_at, content')
       .eq('producer_id', producerId)
       .order('year', { ascending: false })
       .then(({ data, error }) => {
-        if (!error) setFiles((data as unknown as LCDPRFile[]) || [])
+        if (!error) setFiles((data as LCDPRFile[]) || [])
       })
   }, [producerId])
 
@@ -44,18 +42,17 @@ export function useLCDPRFiles(producerId?: string) {
       .eq('year', year)
       .single()
 
-    if (!error && data) setCurrent(data as LCDPRFile)
+    if (!error && data) {
+      setCurrent(data as LCDPRFile)
+    }
     return { data, error }
   }
 
   const _doSave = useRef(
-    debounce(async (fileId: string, rows: any[], meta: any) => {
+    debounce(async (fileId: string, content: any) => {
       setSaving(true)
       setSaveError(null)
-      const { error } = await supabase
-        .from('lcdpr_files')
-        .update({ data: rows, ...meta })
-        .eq('id', fileId)
+      const { error } = await supabase.from('lcdpr_files').update({ content }).eq('id', fileId)
 
       if (error) {
         setSaveError(error.message)
@@ -67,45 +64,29 @@ export function useLCDPRFiles(producerId?: string) {
   ).current
 
   useEffect(() => {
-    return () => _doSave.flush()
+    return () => {
+      if (_doSave && typeof _doSave.flush === 'function') {
+        _doSave.flush()
+      }
+    }
   }, [_doSave])
 
-  const saveCurrentYear = (rows: any[], auditResult: any) => {
+  const saveCurrentYear = (content: any) => {
     if (!current) return
-    setCurrent((c) => (c ? { ...c, data: rows } : null))
-    _doSave(current.id, rows, {
-      score: auditResult?.score ?? null,
-      issues_count: auditResult?.issues?.length ?? 0,
-      issues_data: auditResult?.issues?.slice(0, 50) ?? [],
-    })
+    setCurrent((c) => (c ? { ...c, content } : null))
+    _doSave(current.id, content)
   }
 
-  const createYear = async (year: number, cpf: string, name: string) => {
-    const blank = [
-      {
-        id: 0,
-        reg: '0000',
-        parts: [
-          '0000',
-          'LCDPR',
-          '0013',
-          cpf.replace(/\D/g, ''),
-          name,
-          '0',
-          '0',
-          '',
-          `0101${year}`,
-          `3112${year}`,
-        ],
-      },
-      { id: 1, reg: '0010', parts: ['0010', '1'] },
-      { id: 2, reg: '0030', parts: ['0030', '', '', '', '', '', '', '', '', ''] },
-      { id: 3, reg: '9999', parts: ['9999', '', '', '', '', '', '3'] },
-    ]
+  const createYear = async (year: number, cpf?: string, name?: string) => {
+    const blankContent = {
+      properties: [],
+      accounts: [],
+      q100: [],
+    }
     const { data, error } = await supabase
       .from('lcdpr_files')
-      .insert({ producer_id: producerId, year, data: blank, status: 'draft' })
-      .select('id, year, status, score, issues_count, updated_at')
+      .insert({ producer_id: producerId!, year, content: blankContent, status: 'draft' })
+      .select('*')
       .single()
 
     if (error) {
@@ -114,7 +95,7 @@ export function useLCDPRFiles(producerId?: string) {
         error: error.code === '23505' ? `LCDPR ${year} já existe.` : error.message,
       }
     } else {
-      setFiles((f) => [data as unknown as LCDPRFile, ...f])
+      setFiles((f) => [data as LCDPRFile, ...f])
       return { data, error: null }
     }
   }
@@ -123,7 +104,7 @@ export function useLCDPRFiles(producerId?: string) {
     if (!current) return { error: new Error('Nenhum arquivo carregado') }
     const { error } = await supabase
       .from('lcdpr_files')
-      .update({ status: 'finalized', submitted_at: new Date().toISOString() })
+      .update({ status: 'finalized' })
       .eq('id', current.id)
 
     if (error) return { error }
